@@ -291,7 +291,7 @@ class Game(Cmd):
 
     def display(self, *args):
         message = "".join(args)
-        self.stdout.write(message)
+        self.stdout.write(message + "\r\n")
 
 def play(gamefile):
     #start_room = _create_universe()
