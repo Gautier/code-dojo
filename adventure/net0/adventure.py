@@ -317,12 +317,13 @@ class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
     pass
 
 def main():
-    if len(sys.argv) < 2:
+    if len(sys.argv) < 3:
         print "usage: adventure.py command gamefile [command specific options]"
         print "Where command can be"
         print "    * test : 'unit' tests"
         print "    * server : internet adventure game server"
         print "    * local : local play"
+        return
 
     command, gamefile = sys.argv[1].lower(), sys.argv[2]
     if command == 'test':
