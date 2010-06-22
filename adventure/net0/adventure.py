@@ -1,10 +1,12 @@
 #!/usr/bin/python
+from cmd import Cmd
+import SocketServer
 import re
+import sys
 try:
     from reverend.thomas import Bayes
 except ImportError:
     Bayes = None
-from cmd import Cmd
 
 DIRECTIONS = 'N', 'E', 'S', 'W'
 NORTH, EAST, SOUTH, WEST = DIRECTIONS
@@ -160,25 +162,27 @@ def load_universe(content):
             
 class Game(Cmd):
 
-    def __init__(self, gamefile, player_name):
-        Cmd.__init__(self)
+    def __init__(self, gamefile, player_name,
+                    stdin=sys.stdin, stdout=sys.stdout):
+        Cmd.__init__(self, stdin=stdin, stdout=stdout)
+        self.stdout = stdout
+
         self.locations, self.start_room = load_universe(file(gamefile))
         self.player = Player(self.start_room, player_name)
-        
-        
+
         self.guesser = self._load_guesser()
         if self.guesser is not None:
             # check that you can guess that 'grab' aliases to 'take'
             assert self.guesser.guess('grab')
-        
-        print self.player.location.describe()
-        
+
+        self.display(self.player.location.describe())
+
     def _load_guesser(self):
         if Bayes is None:
             return None
         guesser = Bayes()
-        print guesser
-        print dir(guesser)
+        self.display(guesser)
+        self.display(dir(guesser))
         guesser.load('commands.bays')
         return guesser
 
@@ -187,31 +191,31 @@ class Game(Cmd):
        
         newroom = self.player.location.exits.get(direction,None)
         if newroom == None:
-            print "No pass around!"
+            self.display("No pass around!")
             return
         
         self.player.location = self.player.location.exits[direction]
-        print self.player.location.describe()
+        self.display(self.player.location.describe())
 
     def do_go(self, direction):
         return self.do_move(direction)
 
     def do_look(self, where):
         if where == "":
-            print self.player.location.describe()
+            self.display(self.player.location.describe())
         else:
             # TODO validate where
             target = self.player.location.exits.get(where.upper())
             if target:
-                print target.describe()
+                self.display(target.describe())
                 return
             item = find_item(self.player.location.items, where)
             if not item:
                 item = find_item(self.player.items, where)
             if item:
-                print item.describe()
+                self.display(item.describe())
             else:
-                print "You can't see", where
+                self.display("You can't see", where)
 
     def do_examine(self, where):
         return self.do_look(where)
@@ -223,13 +227,13 @@ class Game(Cmd):
         item = find_item(self.player.location.items, target)
         if item:
             if item.fixed:
-                print item.fixed
+                self.display(item.fixed)
                 return
             del self.player.location.items[item.name]
             self.player.items[item.name] = item
-            print "Taken", item.name
+            self.display("Taken ", item.name)
         else:
-            print "You can't see", target
+            self.display("You can't see ", target)
 
     def do_take(self, target):
         return self.do_get(target)
@@ -239,12 +243,12 @@ class Game(Cmd):
         if item:
             del self.player.items[item.name]
             self.player.location.items[item.name] = item
-            print "Dropped", item.name
+            self.display("Dropped ", item.name)
         else:
-            print "You don't have", target
+            self.display("You don't have ", target)
 
     def do_inventory(self, target):
-        print self.player.inventory()
+        self.display(self.player.inventory())
 
     def do_inv(self, target):
         return self.do_inventory(target)
@@ -254,9 +258,15 @@ class Game(Cmd):
 
     def do_put(self, target):
         return self.do_drop(target)
+
+    def do_quit(self, target):
+        print self.player.name, " just left"
+        self.display("Bye ", self.player.name)
+        # returning True from one of the command terminates the Cmd.cmdloop()
+        return True
             
     def postcmd(self, stop, x):
-        pass
+        return stop
     
     def default(self, line):
         # failed all the above, 
@@ -273,12 +283,16 @@ class Game(Cmd):
             for name in all_item_names:
                 if re.search(r'\b%s\b' % re.escape(name), line, re.I):
                     guesses = self.guesser.guess(line.replace(name,''))
-                    print guesses
+                    self.display(guesses)
                     if guesses:
                         method_name = guesses[0][0]
                         getattr(self, method_name)(all_item_names[name])
                         return
-            
+
+    def display(self, *args):
+        message = "".join(args)
+        self.stdout.write(message)
+
 def play(gamefile):
     #start_room = _create_universe()
     
@@ -287,14 +301,58 @@ def play(gamefile):
     
     g.cmdloop()
 
-if __name__ == '__main__':
-    import sys
-    if sys.argv[1] == 'test':
+
+class TelnetGame(SocketServer.StreamRequestHandler):
+    def handle(self):
+        self.wfile.write("Player name?: ")
+        player_name = self.rfile.readline()
+        player_name = player_name.replace("\r\n", "")
+        player_name = "No name" if not player_name else player_name
+
+        print "handling request from ", player_name, "@", self.client_address
+        g = Game(TelnetGame.gamefile, player_name, self.rfile, self.wfile)
+        g.cmdloop()
+
+class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
+    pass
+
+def main():
+    if len(sys.argv) < 2:
+        print "usage: adventure.py command gamefile [command specific options]"
+        print "Where command can be"
+        print "    * test : 'unit' tests"
+        print "    * server : internet adventure game server"
+        print "    * local : local play"
+
+    command, gamefile = sys.argv[1].lower(), sys.argv[2]
+    if command == 'test':
         test_location()
         test_player()
-        sys.exit(0)
 
-    try:
-        play(sys.argv[1])        
-    except KeyboardInterrupt:
-        pass
+    elif command == 'server':
+        if len(sys.argv) != 5:
+            print "usage: adventure.py server gamefile host port"
+            print "     example: adventure.py server data.txt localhost 2300"
+            return
+
+        TelnetGame.gamefile = gamefile
+
+        host, port = sys.argv[3], sys.argv[4]
+        port = int(port)
+
+        Game.use_rawinput = False
+        server = ThreadedTCPServer((host, port), TelnetGame)
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            # clean socket
+            server.server_close()
+
+    elif command == "local":
+        try:
+            play(gamefile)
+        except KeyboardInterrupt:
+            pass
+
+if __name__ == '__main__':
+    main()
